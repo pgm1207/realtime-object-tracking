@@ -47,10 +47,13 @@ def create_test_video(output_path, num_frames=30, fps=15, height=640, width=640)
     """Create a test video with basic shapes moving"""
     output_path = Path(output_path)
     output_path.parent.mkdir(exist_ok=True, parents=True)
-    
+
+    # Use a codec that matches the container (XVID is AVI-only and produces
+    # unreadable .mp4 files on many systems).
+    fourcc_str = "mp4v" if output_path.suffix.lower() in (".mp4", ".mov", ".m4v") else "XVID"
     writer = cv2.VideoWriter(
         str(output_path),
-        cv2.VideoWriter_fourcc(*'XVID'),
+        cv2.VideoWriter_fourcc(*fourcc_str),
         fps,
         (width, height)
     )

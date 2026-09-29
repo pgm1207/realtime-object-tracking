@@ -39,7 +39,7 @@ except ImportError:
 # Configure paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = PROJECT_ROOT / "inference" / "results"
-VIDEO_DIR = PROJECT_ROOT / "data_sets" / "video_data" / "samples"
+VIDEO_DIR = PROJECT_ROOT / "data_sets" / "video_data"
 OUTPUT_DIR = PROJECT_ROOT / "inference" / "output_videos"
 
 # Create directories if they don't exist

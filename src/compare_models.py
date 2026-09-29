@@ -24,21 +24,21 @@ if str(project_root) not in sys.path:
 # Import project components - handle both relative and absolute imports
 try:
     # Try direct import first
-    from video_utils import get_video_properties
+    from video_utils import get_video_properties, open_video_writer
     from models import ModelManager, DEFAULT_MODEL_PATHS
 except ImportError:
     try:
         # Try relative imports (when running from within src directory)
-        from .video_utils import get_video_properties
+        from .video_utils import get_video_properties, open_video_writer
         from .models import ModelManager, DEFAULT_MODEL_PATHS
     except ImportError:
         # Fall back to absolute imports (when running from project root)
-        from src.video_utils import get_video_properties
+        from src.video_utils import get_video_properties, open_video_writer
         from src.models import ModelManager, DEFAULT_MODEL_PATHS
 
 # Configure paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-VIDEO_DIR = PROJECT_ROOT / "data_sets" / "video_data" / "samples"
+VIDEO_DIR = PROJECT_ROOT / "data_sets" / "video_data"
 OUTPUT_DIR = PROJECT_ROOT / "inference" / "output_videos"
 OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
 
@@ -130,9 +130,10 @@ def create_comparison_video(video_path, model_types, output_path=None, max_frame
     output_width = tile_width * grid_cols
     output_height = tile_height * grid_rows
     
-    # Initialize video writer
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(str(output_path), fourcc, fps_target, (output_width, output_height))
+    # Initialize video writer (with codec fallbacks; never fails silently)
+    out = open_video_writer(output_path, fps_target, (output_width, output_height))
+    if out is None:
+        raise RuntimeError(f"Could not open a video writer for {output_path}")
     
     # Process the video frame by frame
     frame_idx = 0

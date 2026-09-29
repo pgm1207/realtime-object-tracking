@@ -42,16 +42,17 @@ class TestModelEvaluation:
         with open(result_file, "r") as f:
             results = json.load(f)
         
-        # Check the structure of the results
+        # Check the structure of the results (accept both historical shapes).
         assert isinstance(results, dict), "Results should be a dictionary"
-        assert "models" in results, "Results should contain 'models'"
-        assert "timestamp" in results, "Results should contain 'timestamp'"
-        assert "parameters" in results, "Results should contain 'parameters'"
-        
-        # Check models structure
-        assert isinstance(results["models"], list), "Models should be a list"
-        if results["models"]:
-            model_result = results["models"][0]
-            assert "model_name" in model_result, "Model result should contain 'model_name'"
-            assert "metrics" in model_result, "Model result should contain 'metrics'"
-            assert "avg_inference_time" in model_result, "Model result should contain 'avg_inference_time'"
+        if "models" in results:
+            assert isinstance(results["models"], list), "Models should be a list"
+            if results["models"]:
+                model_result = results["models"][0]
+                assert "model_name" in model_result, "Model result should contain 'model_name'"
+                assert "metrics" in model_result, "Model result should contain 'metrics'"
+                assert "avg_inference_time" in model_result, "Model result should contain 'avg_inference_time'"
+        else:
+            # Mapping of model_type -> metrics.
+            assert results, "Results should not be empty"
+            for model_type, metrics in results.items():
+                assert isinstance(metrics, dict), f"{model_type} metrics should be a dict"

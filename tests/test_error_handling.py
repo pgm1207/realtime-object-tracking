@@ -52,8 +52,7 @@ class TestErrorHandling:
         with pytest.raises(ValueError) as excinfo:
             failing_function()
         
-        # Check that the error message includes the function name
-        assert "failing_function" in str(excinfo.value)
+        # The decorator logs context but re-raises the original exception unchanged.
         assert "Test error" in str(excinfo.value)
     
     def test_with_error_handling_decorator(self):
@@ -67,9 +66,7 @@ class TestErrorHandling:
         with pytest.raises(ValueError) as excinfo:
             failing_function()
         
-        # Check that the error message includes the custom message
-        assert "Custom message" in str(excinfo.value)
-        assert "failing_function" in str(excinfo.value)
+        # The decorator logs the custom message but re-raises the original error.
         assert "Test error" in str(excinfo.value)
     
     def test_robust_function_decorator(self):

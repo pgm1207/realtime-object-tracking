@@ -45,105 +45,101 @@ except ImportError:
 
 
 # Import model wrappers directly from consolidated models file
-from src.models import ModelManager # Removed unused YOLOWrapper, RTDETRWrapper, SAMWrapper imports
-try:
-    from models import DEFAULT_MODEL_PATHS as DEFAULT_MODELS # Use alias for compatibility
-except ImportError:
-    # Fallback or error handling if DEFAULT_MODEL_PATHS is also not found
-    print("Error: Could not import DEFAULT_MODEL_PATHS from models.py")
-    DEFAULT_MODELS = {} # Define as empty dict or handle as appropriate
+from src.models import ModelManager, ensure_model_dirs  # lazy heavy deps; no torch needed at import
+from src.models import DEFAULT_MODEL_PATHS as DEFAULT_MODELS
 
 from src.create_demo_video import find_best_model_from_evaluation, OUTPUT_DIR, VIDEO_DIR
 import subprocess  # Added for subprocess-related functionality
 
-def display_video_with_model(video_path, model_manager):
+def display_video_with_model(video_path, model_manager, display=True, output_path=None):
     """
-    Displays video with object detection/segmentation overlays
+    Run a model over a video, optionally showing it and/or writing an output video.
 
     Args:
-        video_path (str): Path to video file
-        model_manager (ModelManager): Initialized model manager
+        video_path (str): Path to the video file.
+        model_manager (ModelManager): Initialized model manager.
+        display (bool): Show a preview window (requires a display). When False the
+            function works headlessly and only writes/summarises.
+        output_path (str, optional): If given, write the annotated video here.
     """
-    # Open the video file
+    from src.video_utils import open_video_writer, _safe_fps
+
+    def _warn(msg):
+        try:
+            messagebox.showwarning("Processing Error", msg)
+        except Exception:
+            pass
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        messagebox.showerror("Error", f"Cannot open video {video_path}") # Use messagebox for GUI errors
         print(f"Error: Cannot open video {video_path}")
         return
 
-    print(f"Starting video processing with {model_manager.model_type} model on device {model_manager.device}...") # Show device
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = _safe_fps(cap.get(cv2.CAP_PROP_FPS))
+    delay = max(1, int(1000 / fps))
+    window = "Video with Object Recognition"
+
+    out = open_video_writer(output_path, fps, (width, height)) if output_path else None
+    if output_path and out is None:
+        print(f"Warning: could not open a writer for {output_path}; output will not be saved.")
+
+    print(f"Starting video processing with {model_manager.model_type} model on device {model_manager.device}...")
     frame_count = 0
     processing_errors = 0
-    max_errors_to_show = 5 # Limit number of error popups
+    max_errors_to_show = 5
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("End of video stream or error reading the video.")
-            break
-
-        frame_count += 1
-        print(f"\nProcessing frame {frame_count}...") # Print frame number
-
-        # Perform prediction based on model type
-        try:
-            annotated_frame = None # Initialize annotated_frame
-            print(f"  Model type is {model_manager.model_type}. Calling model_manager.predict...")
-            # For all our models (expecting detections, segmentations, annotated_frame)
-            results = model_manager.predict(frame)
-            if results and len(results) == 3:
-                detections, segmentations, annotated_frame = results
-                if annotated_frame is None: # Handle case where annotation might fail
-                     annotated_frame = frame.copy()
-                     cv2.putText(annotated_frame, "Annotation Error", (30, 60),
-                                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                print(f"  {model_manager.model_type} processing successful for frame {frame_count}.")
-            else:
-                annotated_frame = frame.copy()
-                cv2.putText(annotated_frame, "No detection results", (30, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                print(f"  {model_manager.model_type} processing returned unexpected results or no results for frame {frame_count}.")
-
-            # Display the annotated frame
-            cv2.imshow("Video with Object Recognition", annotated_frame)
-
-        except Exception as e:
-            processing_errors += 1
-            print(f"Error processing frame {frame_count}:")
-            print(traceback.format_exc())
-            # Show the original frame if processing fails
-            error_frame = frame.copy()
-            cv2.putText(error_frame, f"Error: {str(e)[:50]}", (30, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.imshow("Video with Object Recognition", error_frame)
-            # Show error popup only for the first few errors to avoid spamming
-            if processing_errors <= max_errors_to_show:
-                 messagebox.showwarning("Processing Error", f"Error processing frame {frame_count}:\n{e}\n\nCheck console for details.")
-            if processing_errors == max_errors_to_show + 1:
-                 messagebox.showwarning("Processing Error", "Further processing errors will only be logged to the console.")
-
-
-        # Break the loop if 'q' is pressed or window is closed
-        key = cv2.waitKey(30) & 0xFF
-        if key == ord('q'):
-            print("User pressed 'q'. Exiting...")
-            break
-        # Check if the window was closed
-        try:
-            # This will raise an error if the window is closed
-            if cv2.getWindowProperty("Video with Object Recognition", cv2.WND_PROP_VISIBLE) < 1:
-                print("Window closed by user. Exiting...")
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
                 break
-        except cv2.error:
-            # Error means window is closed
-            print("Window closed by user. Exiting...")
-            break
+            frame_count += 1
 
+            try:
+                results = model_manager.predict(frame)
+                if results and len(results) == 3:
+                    _, _, annotated_frame = results
+                    if annotated_frame is None:
+                        annotated_frame = frame.copy()
+                        cv2.putText(annotated_frame, "Annotation Error", (30, 60),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                else:
+                    annotated_frame = frame.copy()
+                    cv2.putText(annotated_frame, "No detection results", (30, 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            except Exception as e:
+                processing_errors += 1
+                print(f"Error processing frame {frame_count}: {e}")
+                annotated_frame = frame.copy()
+                cv2.putText(annotated_frame, f"Error: {str(e)[:50]}", (30, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                if display and processing_errors <= max_errors_to_show:
+                    _warn(f"Error processing frame {frame_count}:\n{e}\n\nCheck console for details.")
 
-    # Release resources
-    cap.release()
-    cv2.destroyAllWindows()
-    print("Video processing complete.")
+            if out is not None:
+                out.write(annotated_frame)
+
+            if display:
+                cv2.imshow(window, annotated_frame)
+                key = cv2.waitKey(delay) & 0xFF
+                if key == ord('q'):
+                    print("User pressed 'q'. Exiting...")
+                    break
+                try:
+                    if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
+                        break
+                except cv2.error:
+                    break
+    finally:
+        cap.release()
+        if out is not None:
+            out.release()
+        if display:
+            cv2.destroyAllWindows()
+
+    print(f"Video processing complete. Frames: {frame_count}, errors: {processing_errors}.")
 
 def terminal_gui():
     """
@@ -641,7 +637,7 @@ class GraphicalGUI:
             font=("Consolas", 9)
         )
         details_text.grid(row=0, column=0, sticky="nsew")
-        details_scroll.config(command=self.file_listbox.yview)
+        details_scroll.config(command=details_text.yview)
         
         # Make text widget read-only but still allow copy
         details_text.configure(state="disabled")
@@ -1155,29 +1151,33 @@ class GraphicalGUI:
         }
         total_progress = 0.0
         
-        # Define a thread to monitor the process
+        # Worker that actually compresses the dataset files.
         def compress_thread():
             try:
-                # Get paths to check for extracted files
                 dm = DatasetManager()
-                
-                # Update the checking step
+
                 update_ui("Checking for extracted dataset files...", 0.05)
-                time.sleep(0.5)
-                
-                # Check if files exist
+                time.sleep(0.2)
+
                 val_dir_exists = dm.coco_val_dir.exists() and any(dm.coco_val_dir.iterdir())
+                ann_file = dm.coco_ann_dir / "instances_val2017.json"
+                ann_exists = ann_file.exists()
+
+                if not val_dir_exists and not ann_exists:
+                    _show_error("No extracted COCO dataset files found to compress.")
+                    return
+
+                update_ui("Compressing dataset files (this can take a while)...", 0.2)
+                result = dm.compress_datasets()
+                if result is False:
+                    _show_error("Dataset compression failed. See console for details.")
+                    return
+
+                update_ui("Compression complete.", 1.0)
+                _show_completion("Dataset compression complete.")
             except Exception as e:
                 print(f"Error in compress_thread: {e}")
-                # Consider calling update_ui here to inform the user of the error
-                # update_ui(f"Error during compression check: {e}", 0)
-            
-            # The misindented block previously here has been removed.
-            # Its functionality should be within update_ui or other parts of compress_thread's try block.
-
-            # Start the compression monitoring thread
-            thread = threading.Thread(target=compress_thread)
-            # ... existing code ...
+                _show_error(str(e))
 
         def update_ui(message, progress):
             # Update on the main thread
@@ -1312,8 +1312,8 @@ class GraphicalGUI:
                 except Exception as e:
                     print(f"Warning: Could not join existing video thread: {e}")
 
-            # Get model type
-            model_type = self.model_type_var.get()
+            # Get model type (resolves the "(Auto-Best)" option to a concrete model)
+            model_type = self._get_selected_model_for_processing()
             # Determine video path based on selection method
             video_path = self.get_selected_video_path()
             if not video_path:
@@ -1532,24 +1532,30 @@ class GraphicalGUI:
         self.video_thread.start()
 
     def update_video_preview(self, video_path):
-        """Update the video preview panel with frames from the selected video"""
+        """Update the video preview panel with frames from the selected video."""
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            self.preview_label.config(text="Cannot open video")
+            self.show_preview_message("Cannot open video")
             return
-        while not self.stop_preview:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = cv2.resize(frame, (320, 240))
-            self.preview_img = tk.PhotoImage(image=tk.Image.fromarray(frame))
-            self.preview_label.config(image=self.preview_img, text="")
-            if self.stop_preview:
-                break
-            self.root.update_idletasks()
-            self.root.after(30)
-        cap.release()
+        try:
+            while not self.stop_preview:
+                ret, frame = cap.read()
+                if not ret:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # loop the preview
+                    continue
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame = cv2.resize(frame, (320, 240))
+                self.preview_img = ImageTk.PhotoImage(Image.fromarray(frame))
+                self.preview_canvas.delete("all")
+                self.preview_canvas.create_image(
+                    self.preview_canvas.winfo_width() // 2,
+                    self.preview_canvas.winfo_height() // 2,
+                    image=self.preview_img,
+                )
+                self.root.update_idletasks()
+                time.sleep(1 / 30)
+        finally:
+            cap.release()
 
     def on_closing(self):
         """Handle application shutdown properly"""
@@ -3040,34 +3046,48 @@ def main():
     parser = argparse.ArgumentParser(description="Computer Vision Project")
     parser.add_argument("--cli", action="store_true", help="Run in command-line mode")
     # parser.add_argument("--terminal-ui", action="store_true", help="Run with terminal-based UI (Currently disabled)") # Disabled TUI
-    parser.add_argument("--model-type", type=str, choices=["mask-rcnn", "yolo-seg"], 
-                          help="Type of model to use (required for CLI)")
-    parser.add_argument("--model-path", type=str, help="Path to the model weights file (optional for CLI, uses default)")
+    parser.add_argument("--model-type", "--model", dest="model_type", type=str,
+                          choices=list(DEFAULT_MODELS.keys()),
+                          help="Model to use (required for CLI unless --model-path is given)")
+    parser.add_argument("--model-path", type=str, help="Path to custom model weights (optional)")
     parser.add_argument("--video-path", type=str, help="Path to the input video file (required for CLI)")
+    parser.add_argument("--output", "-o", type=str, help="Write the annotated video to this path (CLI)")
+    parser.add_argument("--no-display", action="store_true", help="Do not open a preview window (CLI)")
+    parser.add_argument("--device", type=str, default=None, choices=["cpu", "cuda", "mps"],
+                          help="Force inference device (CLI; default: auto-detect)")
     args = parser.parse_args()
     # Command-line mode
     if args.cli:
-        if not args.model_type or not args.video_path:
-            parser.error("--cli requires --model-type and --video-path arguments.")
-        # Use default model if not specified, otherwise use provided path
+        if not args.video_path:
+            parser.error("--cli requires --video-path.")
+        if not args.model_type and not args.model_path:
+            parser.error("--cli requires --model-type (or --model-path for custom weights).")
         model_path = args.model_path or DEFAULT_MODELS.get(args.model_type)
         if not model_path:
-             print(f"Error: Default model path not found for type '{args.model_type}'. Please specify --model-path.")
-             sys.exit(1)
+            print(f"Error: Default model path not found for type '{args.model_type}'. Please specify --model-path.")
+            sys.exit(1)
         if not os.path.exists(args.video_path):
-             print(f"Error: Video file not found: {args.video_path}")
-             sys.exit(1)
-        # Config path not currently used
-        config_path = None # args.config_path
-        print(f"Running CLI mode with Model: {args.model_type}, Path: {model_path}, Video: {args.video_path}")
+            print(f"Error: Video file not found: {args.video_path}")
+            sys.exit(1)
+
+        model_type = args.model_type or "yolo-custom"
+        print(f"Running CLI mode with Model: {model_type}, Path: {model_path}, Video: {args.video_path}")
         try:
-            model_manager = ModelManager(args.model_type, model_path, config_path)
-            if model_manager.model_wrapper is None or not hasattr(model_manager.model_wrapper, 'model') or model_manager.model_wrapper.model is None:
-                 print(f"Error: Failed to initialize model {args.model_type} from {model_path}")
-                 sys.exit(1)
-            display_video_with_model(args.video_path, model_manager)
-        except Exception as e:
-            print(f"An error occurred during CLI execution:")
+            model_manager = ModelManager(model_type, model_path, None, device=args.device)
+            if (model_manager.model_wrapper is None
+                    or not hasattr(model_manager.model_wrapper, 'model')
+                    or model_manager.model_wrapper.model is None):
+                print(f"Error: Failed to initialize model {model_type} from {model_path}")
+                sys.exit(1)
+            # Headless-safe: only open a preview window when a display is available.
+            has_display = bool(os.environ.get("DISPLAY")) or sys.platform in ("darwin", "win32")
+            display = (not args.no_display) and has_display
+            display_video_with_model(args.video_path, model_manager,
+                                     display=display, output_path=args.output)
+        except SystemExit:
+            raise
+        except Exception:
+            print("An error occurred during CLI execution:")
             print(traceback.format_exc())
             sys.exit(1)
     # Terminal UI mode (Currently disabled)
@@ -3104,6 +3124,6 @@ def main():
         gui.run()
 
 if __name__ == "__main__":
-    # Ensure the models/pts directory exists
-    os.makedirs("models/pts", exist_ok=True)
+    # Ensure the model directories exist (works from any working directory)
+    ensure_model_dirs()
     main()

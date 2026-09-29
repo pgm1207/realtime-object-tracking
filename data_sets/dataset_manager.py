@@ -155,6 +155,10 @@ class DatasetManager:
         if progress_stage:
             self.progress.update_stage(progress_stage, 0.0, f"Starting download of {os.path.basename(destination)}")
         
+        # Define the temp path up front so the error handlers below can always
+        # reference it, even if the request itself fails.
+        temp_dest = destination.with_suffix('.tmp')
+
         for attempt in range(retries):
             try:
                 response = requests.get(url, stream=True, headers=headers, timeout=60) # Added timeout
@@ -164,9 +168,6 @@ class DatasetManager:
                 downloaded_size = 0
                 block_size = 1024 * 8 # Increased block size for potentially faster downloads
 
-                # Use temporary file for download to prevent corrupt files
-                temp_dest = destination.with_suffix('.tmp')
-                
                 with open(temp_dest, 'wb') as f, tqdm(
                         desc=os.path.basename(destination),
                         total=total_size,
@@ -582,6 +583,7 @@ class DatasetManager:
 
 
         # If we used a temporary directory for full extraction, copy selected images
+        val2017_subset_dir = self.coco_val_dir  # selected images live in the validation dir
         if temp_extract_dir and source_image_dir:
             print(f"Copying {len(subset_data['images'])} selected images to {val2017_subset_dir}...")
             val2017_subset_dir.mkdir(parents=True, exist_ok=True) # Ensure target exists

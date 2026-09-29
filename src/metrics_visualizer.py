@@ -9,7 +9,7 @@ any models found in the results file.
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.table import Table
-import seaborn as sns
+import numpy as np
 import numpy as np
 import pandas as pd
 import json
@@ -954,7 +954,7 @@ class MetricsVisualizer:
 
         # Get FPS data and calculate inference time (ms)
         fps_data = self.data['summary_df']['Speed (FPS)']
-        time_ms_data = 1000.0 / fps_data  # Convert FPS to milliseconds per frame
+        time_ms_data = 1000.0 / fps_data.replace(0, np.nan)  # Convert FPS to milliseconds per frame
         
         # Set up the plot
         models = fps_data.index
@@ -1696,7 +1696,7 @@ class MetricsVisualizer:
         # Calculate F1-Score/FPS ratio for each model (Performance efficiency)
         if 'F1-Score' in display_df.columns and 'Speed (FPS)' in display_df.columns:
             # Calculate F1-Score/Performance ratio (efficiency measure)
-            display_df['F1/FPS Ratio'] = display_df['F1-Score'] / display_df['Speed (FPS)']
+            display_df['F1/FPS Ratio'] = display_df['F1-Score'] / display_df['Speed (FPS)'].replace(0, np.nan)
             # Multiply by 100 to make values more readable
             display_df['F1/FPS Ratio'] *= 100.0
             # Add this metric to our available metrics
@@ -1705,7 +1705,7 @@ class MetricsVisualizer:
         # Add Inference Time (ms) based on FPS
         if 'Speed (FPS)' in display_df.columns:
             # Convert FPS to milliseconds per inference
-            display_df['Inference Time (ms)'] = 1000.0 / display_df['Speed (FPS)']
+            display_df['Inference Time (ms)'] = 1000.0 / display_df['Speed (FPS)'].replace(0, np.nan)
             # Add to our available metrics
             available_metrics.append('Inference Time (ms)')
         

@@ -6,13 +6,11 @@ for easier maintenance and use.
 
 import cv2
 import numpy as np
-import torch
 import os
-import requests
 import time
-import torchvision
-from torchvision.transforms import functional as F
 from pathlib import Path
+
+import requests
 
 # Mapping from YOLO class index (0-79) to official COCO category ID (1-90)
 # Based on standard COCO dataset category IDs
@@ -42,11 +40,17 @@ COCO_CLASSES = [
 ]
 
 # --- Model URLs and Default Paths ---
-# Using Path for better path handling
-MODELS_DIR = Path("models/pts")
-MODELS_DIR.mkdir(parents=True, exist_ok=True) # Ensure directory exists
-CONFIGS_DIR = Path("models/configs") # Define config directory
-CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+# Resolve paths relative to this file so the app works from any working
+# directory, and allow overrides via environment variables (portability/tests).
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MODELS_DIR = Path(os.environ.get("RTO_MODELS_DIR", PROJECT_ROOT / "models" / "pts"))
+CONFIGS_DIR = Path(os.environ.get("RTO_CONFIGS_DIR", PROJECT_ROOT / "models" / "configs"))
+
+
+def ensure_model_dirs() -> None:
+    """Create the model/config directories on demand (avoids import-time side effects)."""
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Default paths to model weights/configs
 DEFAULT_MODEL_PATHS = {
@@ -187,82 +191,89 @@ def _download_model_if_needed(model_path: Path, model_key: str):
 class YOLOWrapper:
     """Wrapper for YOLO model inference using the Ultralytics library."""
 
-    def __init__(self, model_path_or_name, conf_threshold=0.25, iou_threshold=0.45):
+    def __init__(self, model_path_or_name, conf_threshold=0.25, iou_threshold=0.45,
+                 device=None, imgsz=None, half=False):
         """
         Initializes the YOLO model wrapper. Handles both detection and segmentation models.
         Relies on the ultralytics YOLO() constructor for loading and potential auto-download.
 
         Args:
-            model_path_or_name (str or Path): Path or name of the YOLO model weights file (.pt).
-            conf_threshold (float): Confidence threshold for detections (default: 0.25)
-            iou_threshold (float): IoU threshold for NMS (default: 0.45)
+            model_path_or_name (str or Path): Path or name of the YOLO weights file (.pt).
+            conf_threshold (float): Confidence threshold for detections (default: 0.25).
+            iou_threshold (float): IoU threshold for NMS (default: 0.45).
+            device (str, optional): Force a device ("cpu", "cuda", "cuda:0", "mps").
+                Auto-detected when None.
+            imgsz (int, optional): Inference image size (e.g. 640) for a speed/accuracy trade-off.
+            half (bool): Use FP16 inference where supported (faster on CUDA).
         """
-        self.input_model_identifier = str(model_path_or_name) # Store the input identifier as string
+        self.input_model_identifier = str(model_path_or_name)
         self.model = None
-        self.model_path = None # Will be set after successful loading
+        self.model_path = None
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
+        self.imgsz = imgsz
+        self.half = half
 
-        # Determine device (cuda or cpu)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Determine device (explicit override wins; otherwise CUDA if available).
+        try:
+            import torch
+            if device:
+                dev = str(device)
+                if dev.startswith("cuda") and not torch.cuda.is_available():
+                    print(f"Requested device '{dev}' but CUDA is unavailable; using CPU.")
+                    dev = "cpu"
+                self.device = torch.device(dev)
+            else:
+                self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        except ImportError:
+            self.device = device or "cpu"
         print(f"Using device: {self.device}")
 
-        # Determine model type name for logging
         self.model_type_name = Path(self.input_model_identifier).stem
         print(f"Attempting to load YOLO model using identifier: {self.input_model_identifier}")
         print(f"Using conf_threshold={self.conf_threshold}, iou_threshold={self.iou_threshold}")
 
         try:
-            from ultralytics import YOLO # Import here to avoid dependency if not used
+            from ultralytics import YOLO  # Imported lazily so the rest of the app works without it.
 
-            # Directly use the YOLO constructor - it handles local paths and auto-downloads for known names
             self.model = YOLO(self.input_model_identifier)
+            try:
+                self.model.to(self.device)
+            except Exception as move_err:
+                print(f"Warning: could not move model to {self.device}: {move_err}")
 
-            # Ensure the model is moved to the correct device
-            self.model.to(self.device)
-
-            # Get the actual path where the model is stored (after potential download)
-            if hasattr(self.model, 'ckpt_path') and self.model.ckpt_path:
-                 self.model_path = Path(self.model.ckpt_path)
-                 print(f"YOLO model ({self.model_type_name}) loaded successfully from: {self.model_path}")
+            ckpt = getattr(self.model, "ckpt_path", None)
+            if ckpt:
+                self.model_path = Path(ckpt)
+                print(f"YOLO model ({self.model_type_name}) loaded successfully from: {self.model_path}")
             else:
-                 # Fallback if ckpt_path isn't available
-                 self.model_path = Path(self.input_model_identifier) if Path(self.input_model_identifier).exists() else None
-                 print(f"YOLO model ({self.model_type_name}) loaded successfully. Path info unavailable.")
-
+                existing = Path(self.input_model_identifier)
+                self.model_path = existing if existing.exists() else None
+                print(f"YOLO model ({self.model_type_name}) loaded successfully.")
         except ImportError:
-             print("Error: 'ultralytics' library not found. Please install it (`pip install ultralytics`)")
-             self.model = None
+            print("Error: 'ultralytics' library not found. Please install it (`pip install ultralytics`)")
+            self.model = None
         except FileNotFoundError as fnf_error:
-             # Specific handling if YOLO() constructor fails with FileNotFoundError
-             print(f"Error loading YOLO model: {fnf_error}")
-             print(f"The identifier '{self.input_model_identifier}' was not found locally, and automatic download failed or is not supported for this identifier by the current ultralytics library version.")
-             # Add specific advice for yolo12
-             if 'yolo12' in self.input_model_identifier:
-                 print("For YOLOv12, ensure you have the latest ultralytics library (`pip install -U ultralytics`) and that the model name is correct according to their documentation.")
-                 print("If auto-download is not supported, you may need to download the '.pt' file manually.")
-             self.model = None
-             import traceback
-             traceback.print_exc()
+            print(f"Error loading YOLO model: {fnf_error}")
+            print(f"The identifier '{self.input_model_identifier}' was not found locally, and automatic download failed.")
+            self.model = None
         except Exception as e:
-            # Catch other potential errors during loading
             print(f"An unexpected error occurred loading YOLO model {self.input_model_identifier}: {e}")
             self.model = None
-            import traceback
-            traceback.print_exc()
 
-    def predict(self, frame: np.ndarray):
+    def predict(self, frame: np.ndarray, return_masks: bool = True):
         """
         Performs object detection and segmentation on a single frame.
 
         Args:
             frame (np.ndarray): Input video frame (BGR format).
+            return_masks (bool): When False, skip per-instance mask extraction, which
+                is significantly faster for video output where masks are not needed.
 
         Returns:
-            tuple: A tuple containing:
-                - detections (list): List of detected objects (dict with 'box', 'class_id', 'class_name', 'score').
-                - segmentations (list): List of segmentation masks (if available, else empty).
-                - annotated_frame (np.ndarray): Frame with visualizations drawn.
+            tuple: (detections, segmentations, annotated_frame). Each detection is a
+                dict with both ``box``/``bbox`` and ``score``/``confidence`` keys so
+                downstream code can use either naming.
         """
         if self.model is None:
             print(f"Warning: YOLO model ({self.model_type_name}) not loaded. Returning empty results.")
@@ -272,100 +283,66 @@ class YOLOWrapper:
             return [], [], annotated_frame
 
         try:
-            # Start timing
             start_time = time.time()
-            
-            # Perform prediction with explicit confidence and IoU thresholds
-            results = self.model(frame, 
-                                verbose=False,  # verbose=False reduces console spam
-                                conf=self.conf_threshold,  # Apply confidence threshold
-                                iou=self.iou_threshold)    # Apply IoU threshold
-            
-            inference_time = time.time() - start_time
-            postprocess_start = time.time()
+
+            predict_kwargs = dict(verbose=False, conf=self.conf_threshold, iou=self.iou_threshold)
+            if self.imgsz:
+                predict_kwargs["imgsz"] = self.imgsz
+            if self.half:
+                predict_kwargs["half"] = True
+            results = self.model(frame, **predict_kwargs)
 
             detections = []
-            segmentations = [] # Placeholder for potential segmentation masks
-            
-            # Create a copy of the frame for annotation
+            segmentations = []
             annotated_frame = results[0].plot()
 
-            # Extract detection details
             for result in results:
                 boxes = result.boxes
-                names = result.names # Class names mapping
-                
-                # Debug class mapping
-                if len(boxes) > 0 and not hasattr(self, '_printed_class_map'):
-                    sample_classes = list(result.names.items())[:5] if result.names else []
-                    print(f"YOLO class mapping sample (first 5): {sample_classes}")
-                    self._printed_class_map = True
-                
+                names = result.names or {}
+
                 for i in range(len(boxes)):
                     box = boxes[i]
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    
-                    # Get YOLO's class ID (0-indexed)
+
                     yolo_class_id = int(box.cls[0])
-                    
-                    # CRITICAL FIX: Map YOLO's 0-indexed class IDs to official COCO category IDs
-                    # Use our mapping dictionary instead of simply adding 1
+                    # Map YOLO's 0-indexed class ID to the official COCO category ID.
                     coco_category_id = YOLO_CLS_INDEX_TO_COCO_ID.get(yolo_class_id)
-                    
+                    if coco_category_id is None:
+                        continue
+
                     score = float(box.conf[0])
                     class_name = names.get(yolo_class_id, f"ID:{yolo_class_id}")
-                    
-                    # Skip detection if the class ID mapping failed
-                    if coco_category_id is None:
-                        print(f"Warning: Could not map YOLO class index {yolo_class_id} ('{class_name}') to COCO category ID. Skipping detection.")
-                        continue
-                    
+
                     detections.append({
                         "box": [x1, y1, x2, y2],
-                        "class_id": coco_category_id,  # Use the correctly mapped COCO category ID
+                        "bbox": [x1, y1, x2, y2],      # alias used by some consumers
+                        "confidence": score,           # alias used by some consumers
+                        "class_id": coco_category_id,
                         "class_name": class_name,
-                        "score": score
+                        "score": score,
                     })
 
-                # Extract segmentation masks if available
-                if result.masks is not None:
+                if return_masks and result.masks is not None:
                     try:
-                        masks_data = result.masks.data
-                        masks_shape = masks_data.shape
-                        
-                        # Process each mask
-                        for i, mask_tensor in enumerate(masks_data):
-                            # Convert mask tensor to numpy array and ensure it's binary
+                        img_h, img_w = frame.shape[:2]
+                        for mask_tensor in result.masks.data:
                             mask_np = mask_tensor.cpu().numpy()
-                            
-                            # Make sure mask is properly formatted for evaluation
-                            # Ensure mask is binary (0/1) or (0/255) for visualization
                             binary_mask = (mask_np > 0.5).astype(np.uint8) * 255
-                            
-                            # Resize mask to match original image dimensions if needed
-                            img_h, img_w = frame.shape[:2]
-                            mask_h, mask_w = binary_mask.shape[:2]
-                            
-                            if mask_h != img_h or mask_w != img_w:
-                                binary_mask = cv2.resize(binary_mask, (img_w, img_h), 
-                                                         interpolation=cv2.INTER_NEAREST)
-                            
+                            if binary_mask.shape[:2] != (img_h, img_w):
+                                binary_mask = cv2.resize(
+                                    binary_mask, (img_w, img_h), interpolation=cv2.INTER_NEAREST
+                                )
                             segmentations.append(binary_mask)
-                    
                     except Exception as mask_error:
                         print(f"Error processing masks: {mask_error}")
-                        # Continue with bounding boxes only if mask processing fails
-                        pass
-            
-            postprocess_time = time.time() - postprocess_start
+
             total_time = time.time() - start_time
-            
-            # Display timing information on frame
-            cv2.putText(annotated_frame, f"FPS: {1/total_time:.1f}", (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            fps = 1.0 / total_time if total_time > 0 else 0.0
+            cv2.putText(annotated_frame, f"FPS: {fps:.1f}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
             return detections, segmentations, annotated_frame
-            
+
         except Exception as e:
             print(f"Error during YOLO ({self.model_type_name}) prediction: {e}")
             import traceback
@@ -388,11 +365,20 @@ class MaskRCNNWrapper:
             model_path (str or Path, optional): Path is ignored as we use pretrained torchvision model.
         """
         print("Initializing MaskRCNNWrapper")
-        
+
+        try:
+            import torch
+            import torchvision
+        except ImportError as e:
+            print(f"Mask R-CNN unavailable (torch/torchvision not installed): {e}")
+            self.model = None
+            self.class_names = COCO_CLASSES
+            return
+
         # Determine device (cuda or cpu)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
-        
+
         try:
             print("Loading Mask R-CNN model from torchvision...")
             # Load the pretrained model - use weights='DEFAULT' for newer torchvision, use pretrained=True for older versions
@@ -436,9 +422,12 @@ class MaskRCNNWrapper:
             return [], [], annotated_frame
             
         try:
+            import torch
+            from torchvision.transforms import functional as F
+
             # Start timing
             start_time = time.time()
-            
+
             # Preprocess the input frame
             # Convert BGR (OpenCV) to RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -553,23 +542,30 @@ class MaskRCNNWrapper:
 class ModelManager:
     """Manages loading and accessing different computer vision models."""
 
-    def __init__(self, model_type, model_path=None, config_path=None, conf_threshold=0.25, iou_threshold=0.45):
+    def __init__(self, model_type, model_path=None, config_path=None,
+                 conf_threshold=0.25, iou_threshold=0.45,
+                 device=None, imgsz=None, half=False):
         """
         Initializes the appropriate model wrapper based on the model type.
 
         Args:
-            model_type (str): Type of the model ('mask-rcnn', 'yolo8-seg', 'yolo12-seg').
-            model_path (str or Path, optional): Path to the model weights file.
-                                                If None, uses default path for the type.
-            config_path (str, optional): Path to the configuration file (not used currently).
-            conf_threshold (float): Confidence threshold for detections (default: 0.25)
-            iou_threshold (float): IoU threshold for NMS (default: 0.45)
+            model_type (str): Model type key (e.g. 'yolov8n-seg').
+            model_path (str or Path, optional): Model weights path. Defaults to the
+                registered path for the type.
+            config_path (str, optional): Reserved for future use.
+            conf_threshold (float): Confidence threshold (default: 0.25).
+            iou_threshold (float): NMS IoU threshold (default: 0.45).
+            device (str, optional): Force an inference device ("cpu", "cuda", "mps").
+            imgsz (int, optional): Inference image size.
+            half (bool): Use FP16 where supported.
         """
         self.model_type = model_type.lower()
-        self.config_path = config_path # Store config path
+        self.config_path = config_path
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
-        
+        self.imgsz = imgsz
+        self.half = half
+
         print(f"ModelManager: Using conf_threshold={self.conf_threshold}, iou_threshold={self.iou_threshold}")
 
         # Determine model path: Use provided path or default for the type
@@ -577,9 +573,9 @@ class ModelManager:
         if not self.model_path:
              raise ValueError(f"Model path not specified and no default path found for type: {self.model_type}")
 
-        # Device selection logic remains the same
-        self.device = self._get_device()
+        self.device = self._get_device(device)
         print(f"Using device: {self.device}")
+        ensure_model_dirs()
         self.model_wrapper = self._initialize_model()
 
         if self.model_wrapper is None or not hasattr(self.model_wrapper, 'model') or self.model_wrapper.model is None:
@@ -587,33 +583,47 @@ class ModelManager:
              # Optionally raise an error here if initialization must succeed
              # raise RuntimeError("Model wrapper initialization failed.")
 
-    def _get_device(self):
-        """Determine the device to use with enhanced detection for problematic CUDA setups."""
-        # Check for environment variable to force CPU
-        force_device = os.environ.get('FORCE_CPU_INFERENCE', '').lower()
-        
-        try:
-            if torch.cuda.is_available() and force_device != "true" and force_device != "cpu":
-                # Try to detect problematic setups
+    def _get_device(self, requested=None):
+        """Determine the device to use: explicit argument, env override, else auto-detect."""
+        # Explicit argument wins.
+        if requested:
+            dev = str(requested).lower()
+            if dev.startswith("cuda"):
                 try:
-                    # Very minimal operation to test if CUDA is actually working
-                    test_tensor = torch.zeros(1).cuda()
-                    del test_tensor
+                    import torch
+                    if not torch.cuda.is_available():
+                        print("Requested CUDA but it is unavailable; using CPU.")
+                        return "cpu"
+                except ImportError:
+                    return "cpu"
+            print(f"Using requested device: {dev}")
+            return dev
+
+        # Environment overrides: RTO_DEVICE / CV_FORCE_DEVICE, or legacy FORCE_CPU_INFERENCE.
+        env_device = os.environ.get("RTO_DEVICE") or os.environ.get("CV_FORCE_DEVICE")
+        if env_device and env_device.lower() != "auto":
+            print(f"Using device from environment: {env_device}")
+            return env_device
+
+        force_cpu = os.environ.get("FORCE_CPU_INFERENCE", "").lower() in ("1", "true", "yes", "cpu")
+        try:
+            import torch
+            if torch.cuda.is_available() and not force_cpu:
+                try:
+                    torch.zeros(1).cuda()
                     print("CUDA is available and working. Using GPU for inference.")
-                    return 'cuda'
+                    return "cuda"
                 except Exception as e:
-                    print(f"CUDA appears to be available but encountered an error: {e}")
-                    print("Falling back to CPU for inference.")
-                    return 'cpu'
+                    print(f"CUDA reported available but failed ({e}); falling back to CPU.")
+                    return "cpu"
+            if force_cpu:
+                print("Forcing CPU usage based on environment variable.")
             else:
-                if force_device == "cpu":
-                     print("Forcing CPU usage based on environment variable.")
-                else:
-                     print("Using CPU for model inference (No CUDA GPU detected/available or CPU forced).")
-                return 'cpu'
-        except Exception as e:
-            print(f"Error detecting device capabilities: {e}. Using CPU as fallback.")
-            return 'cpu'
+                print("Using CPU for model inference (no CUDA GPU detected).")
+            return "cpu"
+        except ImportError:
+            print("PyTorch not installed; using CPU device.")
+            return "cpu"
 
     def _initialize_model(self):
         """Initialize the appropriate model based on type"""
@@ -637,9 +647,12 @@ class ModelManager:
                 
                 # Create the wrapper with proper thresholds
                 yolo_wrapper = YOLOWrapper(
-                    self.model_path, 
+                    self.model_path,
                     conf_threshold=self.conf_threshold,
-                    iou_threshold=self.iou_threshold
+                    iou_threshold=self.iou_threshold,
+                    device=self.device,
+                    imgsz=self.imgsz,
+                    half=self.half,
                 )
                 
                 # Store whether this is a segmentation model for reference
@@ -656,7 +669,7 @@ class ModelManager:
              traceback.print_exc()
              return None
 
-    def predict(self, frame, input_points=None, input_labels=None):
+    def predict(self, frame, input_points=None, input_labels=None, return_masks=True):
         """
         Performs prediction using the selected model.
 
@@ -664,10 +677,11 @@ class ModelManager:
             frame (np.ndarray): Input video frame.
             input_points (Optional[np.ndarray]): Not used by current models.
             input_labels (Optional[np.ndarray]): Not used by current models.
+            return_masks (bool): Whether to compute segmentation masks (YOLO-Seg only).
 
         Returns:
-            tuple: Prediction results: (detections, segmentations, annotated_frame)
-                   Returns ([], [], frame) if the model wrapper is not valid or prediction fails.
+            tuple: (detections, segmentations, annotated_frame). Returns
+                   ([], [], frame) if the model wrapper is not valid or prediction fails.
         """
         if self.model_wrapper is None or not hasattr(self.model_wrapper, 'predict'):
             print(f"Error: Model wrapper for {self.model_type} is not initialized or lacks predict method.")
@@ -678,8 +692,12 @@ class ModelManager:
             return [], [], annotated_frame # Return empty results and annotated frame
 
         try:
-            # All current models (YOLO-Seg) use the same predict signature
-            results = self.model_wrapper.predict(frame)
+            # All current models (YOLO-Seg) use the same predict signature.
+            # Mask R-CNN doesn't accept return_masks, so fall back gracefully.
+            try:
+                results = self.model_wrapper.predict(frame, return_masks=return_masks)
+            except TypeError:
+                results = self.model_wrapper.predict(frame)
             
             # Ensure we have a proper 3-tuple result
             if not results or len(results) != 3:

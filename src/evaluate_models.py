@@ -26,6 +26,7 @@ import pandas as pd
 from datetime import datetime
 import tempfile
 import argparse
+import traceback
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 from pycocotools import mask as maskUtils
@@ -424,12 +425,16 @@ class ModelEvaluator:
         
         # Calculate standard statistics
         if metrics["inference_times"]:
-            metrics["mean_inference_time"] = np.mean(metrics["inference_times"])
-            metrics["median_inference_time"] = np.median(metrics["inference_times"])
-            metrics["min_inference_time"] = np.min(metrics["inference_times"])
-            metrics["max_inference_time"] = np.max(metrics["inference_times"])
-            metrics["std_inference_time"] = np.std(metrics["inference_times"])
-            metrics["fps"] = 1.0 / metrics["mean_inference_time"]
+            metrics["mean_inference_time"] = float(np.mean(metrics["inference_times"]))
+            metrics["median_inference_time"] = float(np.median(metrics["inference_times"]))
+            metrics["min_inference_time"] = float(np.min(metrics["inference_times"]))
+            metrics["max_inference_time"] = float(np.max(metrics["inference_times"]))
+            metrics["std_inference_time"] = float(np.std(metrics["inference_times"]))
+            mean_time = metrics["mean_inference_time"]
+            metrics["fps"] = (1.0 / mean_time) if mean_time > 0 else 0.0
+        else:
+            # No successful inferences: avoid a KeyError later when reporting FPS.
+            metrics["fps"] = 0.0
         
         metrics["classes_detected"] = list(metrics["classes_detected"])
         metrics["unique_classes_detected"] = len(metrics["classes_detected"])
@@ -944,7 +949,7 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Evaluate computer vision models on COCO validation set")
     parser.add_argument("--images", type=int, default=50,
-                        help=f"Number of COCO val2017 images to use (max {COCO_VAL_TOTAL_IMAGES}, default: 250). Increase to 200+ for more reliable mAP metrics.")
+                        help=f"Number of COCO val2017 images to use (max {COCO_VAL_TOTAL_IMAGES}, default: 50). Increase to 200+ for more reliable mAP metrics.")
     parser.add_argument("--no-vis", action="store_true",
                         help="Skip saving individual detection visualizations (dashboard will still be generated)")
     
@@ -960,8 +965,15 @@ def main():
     # Add new argument for IoU threshold
     parser.add_argument("--iou-threshold", type=float, default=0.45,
                         help="IoU threshold for NMS (default: 0.45)")
-    
+
+    # Force the inference device (otherwise auto-detected).
+    parser.add_argument("--device", type=str, default=None, choices=["cpu", "cuda", "mps"],
+                        help="Force inference device (default: auto-detect)")
+
     args = parser.parse_args()
+
+    if args.device:
+        os.environ["RTO_DEVICE"] = args.device
     
     # Validate args
     max_images = min(max(1, args.images), COCO_VAL_TOTAL_IMAGES)
@@ -1029,16 +1041,7 @@ def main():
     # Run evaluation
     evaluator.run_evaluation(max_images, save_individual_visualizations)
 
-    log_info("Evaluation complete!")    # Print a formatted summary table to the terminal
-    try:
-        from print_model_summary import print_summary_table # Should now work
-        print_summary_table()
-    except ImportError as e:
-        log_warning(f"Warning: Could not import summary table module: {e}")
-    except Exception as e:
-        log_error(f"Error printing summary table: {e}")
-        import traceback
-        traceback.print_exc()
+    log_info("Evaluation complete!")
 
     # Always generate the metrics dashboard after evaluation
     log_info("\nGenerating metrics dashboard...")

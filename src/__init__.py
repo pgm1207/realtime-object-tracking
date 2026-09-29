@@ -1,1 +1,1 @@
-# This file makes Python treat the directory 'inference' as a package.
+"""Core package for the real-time object tracking project."""

@@ -8,8 +8,53 @@ It standardizes the visualization and processing logic across all parts of the a
 import cv2
 import numpy as np
 import time
+import math
 from pathlib import Path
 import threading
+
+# Fallback when a container reports no/NaN FPS (common for phone/web MP4s).
+DEFAULT_FPS = 30.0
+
+
+def _safe_fps(fps, default=DEFAULT_FPS):
+    """Return a usable FPS: the container value when sane, otherwise a default."""
+    try:
+        fps = float(fps)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(fps) or fps <= 0:
+        return default
+    return fps
+
+
+def open_video_writer(output_path, fps, size):
+    """Create a VideoWriter with codec fallbacks; returns None if none work.
+
+    Tries H.264 (``avc1``) then ``mp4v`` for .mp4/.mov, and falls back to MJPG in
+    an .avi container so output is still produced where H.264 is unavailable.
+    The writer is verified with ``isOpened()`` so failures are not silent.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fps = _safe_fps(fps)
+
+    ext = output_path.suffix.lower()
+    if ext == ".avi":
+        candidates = [("MJPG", output_path)]
+    elif ext in (".mp4", ".mov", ".m4v"):
+        candidates = [("avc1", output_path), ("mp4v", output_path)]
+    else:
+        candidates = [("mp4v", output_path)]
+    # Final fallback so we always try to produce *some* output.
+    candidates.append(("MJPG", output_path.with_suffix(".avi")))
+
+    for fourcc_str, path in candidates:
+        fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
+        writer = cv2.VideoWriter(str(path), fourcc, fps, size)
+        if writer.isOpened():
+            return writer
+        writer.release()
+    return None
 
 def get_video_properties(video_capture):
     """
@@ -36,7 +81,8 @@ def process_video_with_model(
     stats_callback=None, 
     stop_event=None,
     pause_event=None,
-    add_fps=True
+    add_fps=True,
+    return_masks=True,
 ):
     """
     Process a video with the specified model and generate outputs.
@@ -51,6 +97,8 @@ def process_video_with_model(
         stop_event (threading.Event, optional): Event to signal process termination
         pause_event (threading.Event, optional): Event to signal process pausing
         add_fps (bool): Whether to add FPS counter to video
+        return_masks (bool): Whether to compute segmentation masks (skip for speed
+            when only the annotated video is needed)
         
     Returns:
         dict: Processing statistics
@@ -75,17 +123,16 @@ def process_video_with_model(
     # Get video properties
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
+    fps = _safe_fps(cap.get(cv2.CAP_PROP_FPS))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     stats["total_frames"] = total_frames
-    
+
     # Initialize video writer if output path provided
     out = None
     if output_path:
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Use mp4v codec for MP4
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+        out = open_video_writer(output_path, fps, (width, height))
+        if out is None:
+            print(f"Warning: could not open a video writer for {output_path}; output will not be saved.")
     
     # Initialize counters
     frame_count = 0
@@ -112,11 +159,7 @@ def process_video_with_model(
                 
             frame_count += 1
             current_progress_percentage = (frame_count / total_frames * 100) if total_frames > 0 else 0
-            
-            # Update progress if callback provided (general progress update)
-            if callback and frame_count % 5 == 0:  # Update every 5 frames
-                callback(None, frame_count, total_frames, model_manager.model_type, progress=current_progress_percentage)
-            
+
             try:
                 # Process frame based on model type
                 if model_manager.model_type == "sam":
@@ -132,7 +175,7 @@ def process_video_with_model(
                     results = model_manager.predict(frame, input_points=input_points, input_labels=input_labels)
                 else:
                     # For other models (YOLO-Seg, Mask R-CNN)
-                    results = model_manager.predict(frame)
+                    results = model_manager.predict(frame, return_masks=return_masks)
                     
                 # Unpack results
                 if results and len(results) == 3:
@@ -199,10 +242,7 @@ def process_video_with_model(
                 if callback:
                     # current_progress_percentage is already calculated above
                     callback(error_frame, frame_count, total_frames, model_manager.model_type, progress=current_progress_percentage)
-            
-            # Small delay for UI updates if needed
-            time.sleep(0.01)
-    
+
     except Exception as e:
         print(f"Fatal error in video processing: {e}")
         import traceback
@@ -213,17 +253,16 @@ def process_video_with_model(
         stats["frames_processed"] = frame_count
         stats["processing_time"] = time.time() - start_time
         stats["actual_fps"] = frame_count / stats["processing_time"] if stats["processing_time"] > 0 else 0
-        
-        # Clean up resources
+
+        # Clean up resources (always)
         cap.release()
         if out:
             out.release()
-            
-        # Provide final statistics
-        if stats_callback:
-            stats_callback(stats)
-            
-        return stats
+
+    # Provide final statistics
+    if stats_callback:
+        stats_callback(stats)
+    return stats
 
 
 def apply_standardized_layout(frame, detections, model_type, frame_count, total_frames, width, height, fps=None):
@@ -282,8 +321,8 @@ def apply_standardized_layout(frame, detections, model_type, frame_count, total_
     # 3. Ensure all bounding boxes are visible and properly labeled
     for det in detections:
         class_name = det.get('class_name', 'unknown')
-        confidence = det.get('confidence', 0.0)
-        bbox = det.get('bbox')
+        confidence = det.get('confidence', det.get('score', 0.0))
+        bbox = det.get('bbox', det.get('box'))
         
         if bbox and len(bbox) == 4:
             x1, y1, x2, y2 = [int(b) for b in bbox]
@@ -486,12 +525,11 @@ def process_webcam_with_model(
         stats["total_frames"] = total_frames
         stats["processing_time"] = time.time() - start_time
         stats["actual_fps"] = frame_count / stats["processing_time"] if stats["processing_time"] > 0 else 0
-        
+
         # Clean up resources
         cap.release()
-        
-        # Provide final statistics
-        if stats_callback:
-            stats_callback(stats)
-            
-        return stats
+
+    # Provide final statistics
+    if stats_callback:
+        stats_callback(stats)
+    return stats

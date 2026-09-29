@@ -145,6 +145,7 @@ def create_demo_video(
     model_name="yolov8n-seg",
     video_path=None,
     output_path=None,
+    model_path=None,
     conf_threshold=0.25,
     iou_threshold=0.45,
     device=None,
@@ -171,13 +172,37 @@ def create_demo_video(
         Path to the output video
     """
     try:
-        # Validate model_name against default supported models
-        from models import DEFAULT_MODEL_PATHS
-        valid_models = list(DEFAULT_MODEL_PATHS.keys())
-        model_name = validate_model_name(model_name, valid_models)
-        # Initialize manager
-        manager = ModelManager(model_type=model_name, conf_threshold=conf_threshold, iou_threshold=iou_threshold)
-        
+        # Resolve the device up front so the model is placed correctly.
+        if device:
+            device = validate_device(device)
+        else:
+            try:
+                import torch
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            except ImportError:
+                device = "cpu"
+
+        # Resolve the model: a known default name, or an explicit weights path.
+        if model_path:
+            model_path = validate_file_path(model_path)
+            model_type = "yolo-custom"
+            model_name = Path(model_path).stem
+            log_info(f"Using custom model weights: {model_path}")
+        else:
+            from models import DEFAULT_MODEL_PATHS
+            model_name = validate_model_name(model_name, list(DEFAULT_MODEL_PATHS.keys()))
+            model_type = model_name
+            model_path = None
+
+        # Initialize manager with the resolved device (and optional custom weights)
+        manager = ModelManager(
+            model_type=model_type,
+            model_path=model_path,
+            conf_threshold=conf_threshold,
+            iou_threshold=iou_threshold,
+            device=device,
+        )
+
         if video_path is None:
             # List available samples if no video provided
             samples = list(VIDEO_DIR.glob("*.mp4"))
@@ -188,15 +213,9 @@ def create_demo_video(
                 )
             video_path = samples[0]
             log_info(f"No video path provided. Using sample: {video_path}")
-        
+
         video_path = validate_video(video_path)
-        
-        # Set default device if not provided
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        else:
-            device = validate_device(device)
-        
+
         # Set default output path if not provided
         if output_path is None:
             video_name = Path(video_path).stem
@@ -323,6 +342,8 @@ def main():
                        help="Confidence threshold for detections (default: 0.25)")
     detection_group.add_argument("--iou-threshold", type=float, default=0.45,
                        help="IoU threshold for NMS (default: 0.45)")
+    detection_group.add_argument("--device", type=str, default=None, choices=["cpu", "cuda", "mps"],
+                       help="Force inference device (default: auto-detect)")
     
     # Other options
     other_group = parser.add_argument_group("Other Options")
@@ -348,6 +369,9 @@ def main():
             return
     elif args.model:
         model_type = args.model
+    elif args.model_path:
+        # Custom weights provided; the model name is derived from the file.
+        model_type = None
     else:
         # No model specified - show available models and ask user to choose
         print("\nAvailable models:")
@@ -398,15 +422,13 @@ def main():
     
     # Create the demo video
     output_path = create_demo_video(
-        model_name=model_type, 
-        video_path=video_path, 
-        output_path=args.output, 
-        # args.model_path is not a direct parameter of create_demo_video
-        # and was causing the conflict.
-        # If custom model path is needed, create_demo_video or ModelManager
-        # would need to be adapted to use args.model_path.
+        model_name=model_type,
+        video_path=video_path,
+        output_path=args.output,
+        model_path=args.model_path,
+        device=args.device,
         conf_threshold=args.conf_threshold,
-        iou_threshold=args.iou_threshold
+        iou_threshold=args.iou_threshold,
     )
     
     if output_path:

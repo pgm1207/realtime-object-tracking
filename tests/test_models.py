@@ -1,107 +1,83 @@
 """
 Unit tests for the models module.
-Tests loading models, inference, and various model-related utilities.
+
+These exercise the real, public surface of ``src.models`` and do not require
+downloading model weights. Model-dependent tests skip when weights are absent.
 """
-import pytest
-import torch
 import os
-import numpy as np
-import cv2
 from pathlib import Path
 
-from src.models import ModelManager, DEFAULT_MODEL_PATHS
+import numpy as np
+import pytest
+
+cv2 = pytest.importorskip("cv2")
+
+from src.models import (  # noqa: E402
+    ModelManager,
+    DEFAULT_MODEL_PATHS,
+    YOLO_CLS_INDEX_TO_COCO_ID,
+    COCO_CLASSES,
+)
+
+
+@pytest.mark.unit
+class TestModelRegistry:
+    def test_default_paths_are_defined(self):
+        assert isinstance(DEFAULT_MODEL_PATHS, dict)
+        assert len(DEFAULT_MODEL_PATHS) > 0
+        # Every registered path is a Path object with a .pt file.
+        for key, path in DEFAULT_MODEL_PATHS.items():
+            assert isinstance(path, Path), f"{key} should map to a Path"
+            assert path.suffix == ".pt", f"{key} should point to a .pt file"
+
+    def test_contains_expected_segmentation_models(self):
+        for key in ["yolov8n-seg", "yolov8x-seg", "yolo11m-seg"]:
+            assert key in DEFAULT_MODEL_PATHS
+
+    def test_yolo_to_coco_mapping(self):
+        # 80 YOLO classes mapped to the official COCO category IDs.
+        assert len(YOLO_CLS_INDEX_TO_COCO_ID) == 80
+        assert YOLO_CLS_INDEX_TO_COCO_ID[0] == 1          # person
+        assert YOLO_CLS_INDEX_TO_COCO_ID[79] == 90        # toothbrush
+        assert set(YOLO_CLS_INDEX_TO_COCO_ID).issuperset(range(80))
+        assert all(1 <= v <= 90 for v in YOLO_CLS_INDEX_TO_COCO_ID.values())
+
+    def test_coco_classes_length(self):
+        # 80 classes + background.
+        assert len(COCO_CLASSES) == 91
+        assert COCO_CLASSES[1] == "person"
+
 
 @pytest.mark.unit
 class TestModelManager:
-    """Tests for the ModelManager class"""
-    
-    def test_model_manager_creation(self):
-        """Test that ModelManager can be instantiated"""
-        manager = ModelManager()
-        assert manager is not None, "ModelManager should be instantiated"
-    
-    def test_default_paths_exist(self):
-        """Test that default model paths are defined"""
-        assert DEFAULT_MODEL_PATHS is not None, "DEFAULT_MODEL_PATHS should be defined"
-        assert isinstance(DEFAULT_MODEL_PATHS, dict), "DEFAULT_MODEL_PATHS should be a dictionary"
-        assert len(DEFAULT_MODEL_PATHS) > 0, "DEFAULT_MODEL_PATHS should not be empty"
-        model = manager.load_model(model_name)
-        assert model is not None, f"Failed to load model {model_name}"
-    
-    @pytest.mark.parametrize("model_name", ["yolov8n-seg"])
-    def test_model_info(self, model_name):
-        """Test getting model info"""
-        # Skip if model file doesn't exist
-        model_path = DEFAULT_MODEL_PATHS.get(model_name)
-        if not os.path.exists(model_path):
-            pytest.skip(f"Model file {model_path} not found. Skipping to avoid download.")
-            
-        manager = ModelManager()
-        model_info = manager.get_model_info(model_name)
-        assert isinstance(model_info, dict), "Model info should be a dictionary"
-        assert "name" in model_info, "Model info should contain 'name'"
-        assert "type" in model_info, "Model info should contain 'type'"
-    
-    def test_available_models(self):
-        """Test getting the list of available models"""
-        manager = ModelManager()
-        available_models = manager.get_available_models()
-        assert isinstance(available_models, list), "Available models should be a list"
-        assert len(available_models) > 0, "There should be at least one available model"
-    
-    @pytest.mark.parametrize("model_name", ["yolov8n-seg"])
-    def test_inference_with_image_path(self, sample_image_path, model_name):
-        """Test model inference with an image path"""
-        # Skip if model file doesn't exist
-        model_path = DEFAULT_MODEL_PATHS.get(model_name)
-        if not os.path.exists(model_path):
-            pytest.skip(f"Model file {model_path} not found. Skipping to avoid download.")
-        
-        manager = ModelManager()
-        model = manager.load_model(model_name)
-        results = manager.inference(model, sample_image_path)
-        
-        assert results is not None, "Inference should return results"
-        assert "boxes" in results, "Results should contain 'boxes'"
-        assert "scores" in results, "Results should contain 'scores'"
-        assert "labels" in results, "Results should contain 'labels'"
-        assert "masks" in results, "Results should contain 'masks'"
-        assert "time" in results, "Results should contain 'time'"
-    
-    @pytest.mark.parametrize("model_name", ["yolov8n-seg"])
-    def test_inference_with_numpy_image(self, sample_image_path, model_name):
-        """Test model inference with a numpy image"""
-        # Skip if model file doesn't exist
-        model_path = DEFAULT_MODEL_PATHS.get(model_name)
-        if not os.path.exists(model_path):
-            pytest.skip(f"Model file {model_path} not found. Skipping to avoid download.")
-        
-        # Load the sample image as numpy array
-        img = cv2.imread(sample_image_path)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # Convert to RGB
-        
-        manager = ModelManager()
-        model = manager.load_model(model_name)
-        results = manager.inference(model, img)
-        
-        assert results is not None, "Inference should return results"
-        assert "boxes" in results, "Results should contain 'boxes'"
-    
-    @pytest.mark.gpu
-    @pytest.mark.parametrize("model_name", ["yolov8n-seg"])
-    def test_gpu_inference(self, sample_image_path, model_name):
-        """Test model inference on GPU if available"""
-        if not torch.cuda.is_available():
-            pytest.skip("GPU not available")
-            
-        # Skip if model file doesn't exist
-        model_path = DEFAULT_MODEL_PATHS.get(model_name)
-        if not os.path.exists(model_path):
-            pytest.skip(f"Model file {model_path} not found. Skipping to avoid download.")
-        
-        manager = ModelManager()
-        model = manager.load_model(model_name, device="cuda")
-        results = manager.inference(model, sample_image_path)
-        
-        assert results is not None, "GPU inference should return results"
-        assert "boxes" in results, "Results should contain 'boxes'"
+    def test_missing_type_raises(self):
+        # model_type is required.
+        with pytest.raises(TypeError):
+            ModelManager()  # type: ignore[call-arg]
+
+    def test_unknown_type_raises(self):
+        with pytest.raises(ValueError):
+            ModelManager("definitely-not-a-model")
+
+    def test_device_override_is_respected(self):
+        # CPU is always a valid explicit request.
+        manager = ModelManager("yolov8n-seg", device="cpu")
+        assert str(manager.device).startswith("cpu")
+
+    @pytest.mark.slow
+    def test_predict_returns_expected_tuple(self):
+        model_path = DEFAULT_MODEL_PATHS["yolov8n-seg"]
+        if not model_path.exists():
+            pytest.skip(f"Model weights not present: {model_path}")
+
+        manager = ModelManager("yolov8n-seg", model_path=model_path, device="cpu")
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        detections, segmentations, annotated = manager.predict(frame)
+
+        assert isinstance(detections, list)
+        assert isinstance(segmentations, list)
+        assert annotated.shape == frame.shape
+        # Detection dicts expose both naming conventions.
+        for det in detections:
+            assert "box" in det and "bbox" in det
+            assert "score" in det and "confidence" in det
