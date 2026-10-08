@@ -1,0 +1,35 @@
+{
+  "app-id": "io.github.pgm1207.ObjectMonitor",
+  "runtime": "org.gnome.Platform",
+  "runtime-version": "50",
+  "sdk": "org.gnome.Sdk",
+  "command": "object-monitor",
+  "finish-args": [
+    "--share=network",
+    "--share=ipc",
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--device=dri",
+    "--filesystem=xdg-videos:ro"
+  ],
+  "modules": [
+    "python3-monitor-deps.json",
+    {
+      "name": "object-monitor",
+      "buildsystem": "simple",
+      "build-commands": [
+        "python3 -m pip install --no-deps --no-build-isolation --prefix=/app .",
+        "install -Dm755 flatpak/object-monitor-launch /app/bin/object-monitor",
+        "install -Dm644 flatpak/io.github.pgm1207.ObjectMonitor.desktop /app/share/applications/io.github.pgm1207.ObjectMonitor.desktop",
+        "install -Dm644 flatpak/io.github.pgm1207.ObjectMonitor.metainfo.xml /app/share/metainfo/io.github.pgm1207.ObjectMonitor.metainfo.xml",
+        "install -Dm644 flatpak/io.github.pgm1207.ObjectMonitor.svg /app/share/icons/hicolor/scalable/apps/io.github.pgm1207.ObjectMonitor.svg"
+      ],
+      "sources": [
+        {
+          "type": "dir",
+          "path": ".."
+        }
+      ]
+    }
+  ]
+}
