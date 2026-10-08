@@ -62,3 +62,8 @@ inference/output_videos/
 
 # Local Object Monitor outputs
 runs/
+
+# Flatpak generated dependencies and build trees
+flatpak/python3-monitor-deps.json
+build/flatpak/
+.flatpak-builder/
