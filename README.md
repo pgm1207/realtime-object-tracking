@@ -6,6 +6,24 @@ family, with COCO evaluation, a metrics dashboard, and a demo-video generator.
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
 
+## GNOME desktop application (new)
+
+A **native GTK4 + libadwaita desktop frontend** is available in the GNOME
+desktop development branch. It provides file/camera selection, editable
+monitoring parameters, a near-live annotated preview, event counters, and a
+background inference worker that can be stopped safely.
+
+```bash
+# On Arch/CachyOS, GTK must be available to the active Python environment:
+sudo pacman -S --needed python-gobject gtk4 libadwaita
+python -m venv --system-site-packages .venv && source .venv/bin/activate
+pip install -e .
+rto-desktop
+```
+
+[GNOME and Flatpak developer guide](docs/gnome-flatpak.md). The Flatpak build
+recipe is available, but is **not yet a verified release artifact**.
+
 ## Local Object Monitor (new)
 
 Instead of only comparing AI models, you can now **monitor a video, webcam or
