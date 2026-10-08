@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.pgm1207.ObjectMonitor</id>
+  <name>Object Monitor</name>
+  <summary>Private, local object tracking and video analytics</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>Analyze video clips locally using YOLO tracking, flexible zones,
+    entrance and exit events, and dwell-time measurements. Data remains on
+    your computer, with optional annotated video recording.</p>
+    <p>Model weights may need an initial download; inference runs locally.
+    Results export as JSONL and CSV files.</p>
+  </description>
+  <launchable type="desktop-id">io.github.pgm1207.ObjectMonitor.desktop</launchable>
+  <url type="homepage">https://github.com/pgm1207/realtime-object-tracking</url>
+  <url type="bugtracker">https://github.com/pgm1207/realtime-object-tracking/issues</url>
+  <provides>
+    <binary>object-monitor</binary>
+  </provides>
+  <releases>
+    <release version="1.2.0" date="2026-10-08">
+      <description><p>Initial GNOME/libadwaita desktop frontend.</p></description>
+    </release>
+  </releases>
+</component>
