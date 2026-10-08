@@ -1,0 +1,3 @@
+#!/bin/sh
+# Dependencies are bundled in /app. Never execute the host's Python or pip.
+exec /usr/bin/python3 -m src.desktop "$@"
