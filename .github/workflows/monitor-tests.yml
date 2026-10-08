@@ -1,0 +1,30 @@
+name: Local monitor tests
+
+on:
+  push:
+    branches: [main, "feat/local-zone-monitor-mvp"]
+  pull_request:
+    paths:
+      - "src/monitor.py"
+      - "src/monitor_core.py"
+      - "tests/test_monitor_core.py"
+      - "pyproject.toml"
+      - ".github/workflows/monitor-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile Python source
+        run: python -m compileall -q src
+      - name: Check CLI works without model dependencies
+        run: python -m src.monitor --help
+      - name: Run model-free monitoring tests
+        run: python -m unittest discover -s tests -p 'test_monitor_core.py' -v
