@@ -2,10 +2,15 @@ name: Local monitor tests
 
 on:
   push:
-    branches: [main, "feat/local-zone-monitor-mvp"]
+    branches: [main, "feat/local-zone-monitor-mvp", "feat/gnome-adwaita-desktop"]
   pull_request:
     paths:
       - "src/monitor.py"
+      - "src/desktop.py"
+      - "src/desktop_backend.py"
+      - "tests/test_desktop_backend.py"
+      - "flatpak/**"
+      - "scripts/build-flatpak.sh"
       - "src/monitor_core.py"
       - "tests/test_monitor_core.py"
       - "pyproject.toml"
@@ -28,3 +33,5 @@ jobs:
         run: python -m src.monitor --help
       - name: Run model-free monitoring tests
         run: python -m unittest discover -s tests -p 'test_monitor_core.py' -v
+      - name: Run GNOME desktop adapter and manifest tests
+        run: python -m unittest discover -s tests -p 'test_desktop_backend.py' -v

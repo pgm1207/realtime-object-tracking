@@ -1,0 +1,7 @@
+# Minimal engine dependencies. Transitive dependencies are locked with SHA256
+# hashes by flatpak-pip-generator for offline flatpak-builder builds.
+# PyPI torch for Linux can include large CUDA libraries; v1 prioritizes CPU.
+torch==2.7.0
+torchvision==0.22.0
+ultralytics==8.3.130
+opencv-python==4.11.0.86

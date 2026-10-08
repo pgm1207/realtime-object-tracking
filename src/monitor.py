@@ -9,7 +9,10 @@ import csv
 from datetime import datetime, timezone
 import json
 import math
+import os
 from pathlib import Path
+import signal
+import threading
 import time
 from urllib.parse import urlsplit, urlunsplit
 
@@ -62,6 +65,8 @@ def parser() -> argparse.ArgumentParser:
                    help="Parent folder for timestamped run outputs")
     p.add_argument("--save-video", action="store_true", help="Opt in to saving annotated video")
     p.add_argument("--preview", action="store_true", help="Display live preview (q or Esc to quit)")
+    p.add_argument("--preview-snapshot", type=Path,
+                   help="Publish a periodically updated JPEG for a desktop frontend")
     return p
 
 
@@ -168,6 +173,14 @@ def run(args: argparse.Namespace) -> dict:
     frames = 0
     last_seconds = 0.0
     started = time.perf_counter()
+    stop_requested = threading.Event()
+    # Graceful termination preserves valid JSON and releases capture/writer.
+    signal_handler = None
+    if threading.current_thread() is threading.main_thread():
+        signal_handler = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, lambda _signum, _frame: stop_requested.set())
+    last_snapshot_at = 0.0
+    print(f"RTO_RUN_DIR={run_dir}", flush=True)
     print(f"Monitoring {args.source if not live else 'live source'}; reports: {run_dir}")
     try:
         if args.save_video:
@@ -178,7 +191,7 @@ def run(args: argparse.Namespace) -> dict:
                 (run_dir / "occupancy.csv").open("w", newline="", encoding="utf-8") as metrics_file:
             csv_writer = csv.writer(metrics_file)
             csv_writer.writerow(["time_s", "frame", "zone", "count"])
-            while True:
+            while not stop_requested.is_set():
                 ok, frame = cap.read()
                 if not ok:
                     break
@@ -207,12 +220,23 @@ def run(args: argparse.Namespace) -> dict:
                 events, occupancy = monitor.update(observations, seconds, frames, (width, height))
                 for event in events:
                     event_file.write(json.dumps(event) + "\n")
+                if events:
+                    event_file.flush()
                 for zone in zones:
                     count = sum(v for (name, _), v in occupancy.items() if name == zone.name)
                     csv_writer.writerow([f"{seconds:.3f}", frames, zone.name, count])
 
-                if writer is not None or args.preview:
+                if writer is not None or args.preview or args.preview_snapshot:
                     annotated = _draw_zones(result.plot(), zones, occupancy, cv2)
+                    if args.preview_snapshot:
+                        now = time.perf_counter()
+                        if now - last_snapshot_at >= 0.2:
+                            target = args.preview_snapshot
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            temporary = target.with_name(f".{target.stem}.tmp.jpg")
+                            if cv2.imwrite(str(temporary), annotated):
+                                os.replace(temporary, target)
+                            last_snapshot_at = now
                     if writer is not None:
                         writer.write(annotated)
                     if args.preview:
@@ -231,6 +255,8 @@ def run(args: argparse.Namespace) -> dict:
             writer.release()
         if args.preview:
             cv2.destroyAllWindows()
+        if signal_handler is not None:
+            signal.signal(signal.SIGTERM, signal_handler)
 
     elapsed = time.perf_counter() - started
     if frames == 0:
