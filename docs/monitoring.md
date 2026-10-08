@@ -14,7 +14,7 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-On Windows, activate with `.venv\\Scripts\\activate` instead. PyTorch accelerator
+On Windows, activate with `.venv\Scripts\activate` instead. PyTorch accelerator
 support depends on your hardware and installation. CPU inference works but may be
 slower. Ultralytics downloads weights on the first run if they are not present;
 subsequent runs can be local/offline with cached weights.
@@ -24,15 +24,15 @@ subsequent runs can be local/offline with cached weights.
 ### Measure traffic through a zone in an existing video
 
 ```bash
-rto-monitor --source data_sets/video_data/people-detection.mp4 \\
-  --zone entrance:0.15,0.2,0.85,0.9 \\
+rto-monitor --source data_sets/video_data/people-detection.mp4 \
+  --zone entrance:0.15,0.2,0.85,0.9 \
   --classes person --dwell 3 --save-video
 ```
 
 ### Monitor a webcam
 
 ```bash
-rto-monitor --source 0 --classes person --preview \\
+rto-monitor --source 0 --classes person --preview \
   --zone left:0,0,0.5,1 --zone right:0.5,0,1,1
 ```
 
@@ -43,8 +43,8 @@ saved to a new timestamped folder under `runs/monitor/`.
 ### Monitor an RTSP camera
 
 ```bash
-rto-monitor --source 'rtsp://camera.example/stream' \\
-  --zone workbench:0.25,0.35,0.75,0.95 \\
+rto-monitor --source 'rtsp://camera.example/stream' \
+  --zone workbench:0.25,0.35,0.75,0.95 \
   --classes person --dwell 10 --max-frames 3000
 ```
 
@@ -55,7 +55,7 @@ accessible to other users. The camera feed must be reachable by OpenCV.
 ### Track vehicles in a parking area
 
 ```bash
-rto-monitor --source parking.mp4 --classes car,truck,motorcycle \\
+rto-monitor --source parking.mp4 --classes car,truck,motorcycle \
   --zone bay:0.30,0.30,0.85,0.95 --tracker botsort.yaml
 ```
 
