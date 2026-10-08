@@ -327,7 +327,15 @@ class MonitorWindow(Adw.ApplicationWindow):
                 try:
                     with event_path.open(encoding="utf-8") as events:
                         events.seek(self._event_offset)
-                        for line in events:
+                        while True:
+                            previous_offset = events.tell()
+                            line = events.readline()
+                            if not line:
+                                break
+                            if not line.endswith("\\n"):
+                                # A writer may still be appending this JSON event.
+                                events.seek(previous_offset)
+                                break
                             try:
                                 event = json.loads(line)
                             except json.JSONDecodeError:
