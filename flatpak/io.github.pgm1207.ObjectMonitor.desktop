@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Object Monitor
+GenericName=Local Video Analytics
+Comment=Track objects and monitor zones in local video
+Exec=object-monitor
+Icon=io.github.pgm1207.ObjectMonitor
+Terminal=false
+Categories=Graphics;Video;Science;
+Keywords=YOLO;Objects;Tracking;Video;Camera;Analytics;
+StartupNotify=true
