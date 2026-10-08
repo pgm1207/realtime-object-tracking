@@ -6,6 +6,24 @@ family, with COCO evaluation, a metrics dashboard, and a demo-video generator.
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
 
+## Local Object Monitor (new)
+
+Instead of only comparing AI models, you can now **monitor a video, webcam or
+RTSP camera** to count objects in configurable zones, track arrivals and
+departures, and detect long stays. It exports structured **JSONL events** and
+**CSV occupancy history**, with optional annotated video. All processing is local.
+
+```bash
+pip install -e .
+rto-monitor --source data_sets/video_data/people-detection.mp4 \
+  --zone entrance:0.15,0.2,0.85,0.9 --classes person --dwell 3 --save-video
+```
+
+Read the [practical monitoring guide](docs/monitoring.md) for setup,
+camera examples, event formats, privacy notes and limitations.
+
+## University model-evaluation workflow
+
 This project fulfils **Task 2: Recognizing Objects in Video Sequences** — it evaluates
 three state-of-the-art segmentation models on a representative COCO subset and produces
 an annotated demo video with the best one. See
