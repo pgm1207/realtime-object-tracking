@@ -220,6 +220,8 @@ def run(args: argparse.Namespace) -> dict:
                 events, occupancy = monitor.update(observations, seconds, frames, (width, height))
                 for event in events:
                     event_file.write(json.dumps(event) + "\n")
+                if events:
+                    event_file.flush()
                 for zone in zones:
                     count = sum(v for (name, _), v in occupancy.items() if name == zone.name)
                     csv_writer.writerow([f"{seconds:.3f}", frames, zone.name, count])
