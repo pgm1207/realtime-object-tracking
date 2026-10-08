@@ -332,7 +332,7 @@ class MonitorWindow(Adw.ApplicationWindow):
                             line = events.readline()
                             if not line:
                                 break
-                            if not line.endswith("\\n"):
+                            if not line.endswith("\n"):
                                 # A writer may still be appending this JSON event.
                                 events.seek(previous_offset)
                                 break
